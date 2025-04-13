@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -36,7 +37,6 @@ func (y *M4gtv) HandleMainRequest(c *gin.Context, channelID, assetID, cdnType st
 				c.Data(http.StatusOK, "application/vnd.apple.mpegurl", m3u8Raw)
 				return
 			} else {
-				fmt.Println("ttttttttttt")
 				m3u8Content := ReplaceM3u8Data(string(m3u8Raw), "http://"+c.Request.Host+c.Request.URL.Path+"?ts=")
 				if m3u8Content == "" {
 					LogError()
@@ -115,36 +115,100 @@ NEXT:
 	}
 
 }
-func (y *M4gtv) HandleTsRequest(c *gin.Context, tsUrl string) {
 
+// HandleTsRequest 处理 TS 流代理请求
+func (y *M4gtv) HandleTsRequest(c *gin.Context, tsUrl string) {
+	// 解析 URL
 	parsedURL, err := url.Parse(tsUrl)
 	if err != nil {
-		LogError(err)
-		c.String(404, "", err)
+		LogError("Invalid URL: ", err)
+		c.String(http.StatusBadRequest, "Invalid URL")
 		return
-	}
-	_, exist := ProxyUrlWhiteList[parsedURL.Host]
-	if !exist {
-		LogError("未知的ts", tsUrl)
-		c.String(404, "未知的ts")
 	}
 
-	statusCode, respBody, err := MRequest(tsUrl, "GET", nil,
-		map[string]string{
-			"Referer":    "https://imasdk.googleapis.com",
-			"origin":     "https://imasdk.googleapis.com",
-			"User-Agent": "Mozilla/5.0 (Linux; Android 12; M2011K2C ; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/134.0.6998.135 Mobile Safari/537.36",
-			//"Accept-Encoding": "identity",
-		}, false)
-	if err != nil || respBody == "" {
-		LogError("HandleTsRequest 失败：", err)
-		c.String(statusCode, respBody)
+	// 检查白名单
+	if _, exist := ProxyUrlWhiteList[parsedURL.Host]; !exist {
+		LogError("Unknown TS host: ", tsUrl)
+		c.String(http.StatusNotFound, "Unknown TS host")
 		return
 	}
-	// 设置响应头为视频流类型
-	c.Header("Content-Type", "video/MP2T")
-	// 返回视频数据
-	c.String(statusCode, respBody)
+
+	// 构造请求头，验证并复制客户端的 Range 头部
+	requestHeader := map[string]string{
+		"Referer":         "https://imasdk.googleapis.com",
+		"Origin":          "https://imasdk.googleapis.com",
+		"User-Agent":      "Mozilla/5.0 (Linux; Android 12; M2011K2C; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/134.0.6998.135 Mobile Safari/537.36",
+		"Accept-Encoding": "identity", // 禁用 gzip 压缩
+	}
+	if rangeHeader := c.GetHeader("Range"); rangeHeader != "" {
+		if !strings.HasPrefix(rangeHeader, "bytes=") || strings.Contains(rangeHeader, "..") {
+			LogError("Invalid Range header: ", rangeHeader)
+			c.String(http.StatusBadRequest, "Invalid Range header")
+			return
+		}
+		requestHeader["Range"] = rangeHeader
+	}
+
+	// 发送请求
+	resp, err := MRequestTS(tsUrl, "GET", requestHeader)
+	if err != nil {
+		LogError("Failed to fetch TS: ", err)
+		c.String(http.StatusBadGateway, "Failed to fetch TS")
+		return
+	}
+	defer resp.Body.Close()
+
+	// 设置响应头
+	for key, values := range resp.Header {
+		for _, value := range values {
+			c.Header(key, value)
+		}
+	}
+	c.Header("Content-Type", "video/mp2t")
+
+	// 设置状态码
+	c.Status(resp.StatusCode)
+
+	// 流式传输数据，处理连接中断
+	reader := resp.Body
+	ctx := c.Request.Context()
+	writer := c.Writer
+
+	// 确保 writer 支持 Flush
+	flusher, canFlush := writer.(http.Flusher)
+
+	// 使用缓冲区逐步传输数据
+	buf := make([]byte, 64*1024) // 64KB 缓冲区
+	for {
+		select {
+		case <-ctx.Done():
+			LogError("Client connection closed: ", ctx.Err())
+			return
+		default:
+			nr, er := reader.Read(buf)
+			if nr > 0 {
+				nw, ew := writer.Write(buf[:nr])
+				if ew != nil {
+					LogError("Write error: ", ew)
+					return
+				}
+				if nr != nw {
+					LogError("Short write")
+					return
+				}
+				// 定期 Flush 减少缓冲延迟
+				if canFlush {
+					flusher.Flush()
+				}
+			}
+			if er != nil {
+				if er != io.EOF {
+					LogError("Read error: ", er)
+				}
+				return
+			}
+		}
+	}
 }
 
 func HandleM3u8Raw(m3u8Url string, returnType string) (string, error) {

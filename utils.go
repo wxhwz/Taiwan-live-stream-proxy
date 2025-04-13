@@ -155,6 +155,50 @@ func MRequest(requestUrl, method string, requestBody interface{}, requestHeader 
 	return 0, "", lastErr
 }
 
+// MRequestTS 发送 TS 请求
+func MRequestTS(requestUrl string, method string, requestHeader map[string]string) (*http.Response, error) {
+	var lastErr error
+	for attempt := 1; attempt <= RetryAttempts; attempt++ {
+		// 创建请求
+		req, err := http.NewRequest(strings.ToUpper(method), requestUrl, nil)
+		if err != nil {
+			return nil, fmt.Errorf("attempt %d: create request failed: %w", attempt, err)
+		}
+
+		// 设置请求头
+		for key, value := range requestHeader {
+			req.Header.Set(key, value)
+		}
+
+		// 发送请求
+		resp, err := Client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("attempt %d: request failed: %w", attempt, err)
+			if attempt < RetryAttempts {
+				time.Sleep(RetrySleepTime)
+				continue
+			}
+			return nil, lastErr
+		}
+
+		// 如果状态码表示可重试的错误（如 429, 503），关闭响应体并重试
+		if resp.StatusCode >= 500 || resp.StatusCode == 429 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("attempt %d: server error with status code %d", attempt, resp.StatusCode)
+			if attempt < RetryAttempts {
+				time.Sleep(RetrySleepTime)
+				continue
+			}
+			return resp, lastErr
+		}
+
+		// 返回响应，调用者负责关闭 resp.Body
+		return resp, nil
+	}
+
+	return nil, lastErr
+}
+
 func InitUID() {
 	FsEncKey = uuid.New().String()
 }
