@@ -148,7 +148,7 @@ func LitvLoadFromFile(filename string) error {
 	return json.Unmarshal(data, &LitvChannels)
 }
 
-func LitvGenerateM3U8(id string) []byte {
+func LitvGenerateM3U8(id string) []byte { //经测试，Litv最多回放10分钟，懒得写回看代码
 	ch := LitvChannels[id]
 
 	timestamp := int(time.Now().Unix()/4 - 355017625)

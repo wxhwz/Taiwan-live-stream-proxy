@@ -282,6 +282,7 @@ func GetPlayUrl(channelID, assetID string) (string, error) {
 }
 
 func CheckPlayable() {
+	LogInfo("开始测试4gtv")
 	playUrl := ""
 	if len(ChannelsData) == 0 {
 		LogError("ChannelsData为空，跳过检测 4gtv api")
@@ -296,6 +297,7 @@ func CheckPlayable() {
 
 NEXT:
 	//litv
+	LogInfo("开始测试Litv")
 	timestamp := int(time.Now().Unix()/4 - 355017625)
 	t := timestamp * 4
 	tsUrl := ""
@@ -322,6 +324,7 @@ NEXT:
 		}
 		break
 	}
+	LogInfo("当前测试url：", tsUrl)
 
 	statusCode, _, err := MRequest(tsUrl, "GET", nil,
 		map[string]string{

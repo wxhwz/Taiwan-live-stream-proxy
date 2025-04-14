@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"strings"
 	"time"
 
@@ -126,7 +127,7 @@ func main() {
 	go timedFunction(done)
 
 	r := setupRouter()
-	LogInfo("\n")
+	fmt.Printf("\n")
 	LogInfo("对当前ip进行检测")
 	CheckPlayable()
 	LogInfo("检测完毕\n")
